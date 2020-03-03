@@ -1,0 +1,35 @@
+version: '3'
+services:
+   odoo:
+      container_name: test-odoo
+      image: odoo:12
+      depends_on:
+        - odoo-db
+      environment:
+        - HOST=odoo-db
+        - USER=odoo
+        - PASSWORD=odoo
+      volumes:
+        #- ./config:/etc/odoo
+        - odoo-web-data:/var/lib/odoo
+      ports:
+        - "127.0.0.1:8069:8069"
+      networks:
+        - odoo-net
+   odoo-db:
+      container_name: test-odoo-db
+      image: postgres:10
+      environment:
+        - POSTGRES_DB=postgres
+        - POSTGRES_USER=odoo
+        - POSTGRES_PASSWORD=odoo
+      volumes:
+        - odoo-db-data:/var/lib/postgresql/data
+      networks:
+        - odoo-net
+volumes:
+   odoo-db-data:
+   odoo-web-data:
+networks:
+   odoo-net:
+
