@@ -1,60 +1,88 @@
-FROM debian:buster
+FROM debian:stretch-slim
 MAINTAINER Bohm Technologies <it@bohmtech.com>
 
 # Generate locale C.UTF-8 for postgres and general locale data
 ENV LANG C.UTF-8
 
+# *** BOHM UPDATES ***
 # Create the Odoo User and assign it to a specific UID so ODOO has write access to the
 # NFS mount points.
-
+# ==============================================================================
 RUN mkdir /var/lib/odoo \
     && groupadd odoo -g 1002 \
     && useradd -d /var/lib/odoo -s /bin/false -u 1002 -g odoo odoo \
     && chown -R odoo:odoo /var/lib/odoo
+# ==============================================================================
+
+# Use backports to avoid install some libs with pip
+RUN echo 'deb http://deb.debian.org/debian stretch-backports main' > /etc/apt/sources.list.d/backports.list
 
 # Install some deps, lessc and less-plugin-clean-css, and wkhtmltopdf
 RUN set -x; \
         apt-get update \
         && apt-get install -y --no-install-recommends \
-            vim \
             ca-certificates \
             curl \
+            dirmngr \
+            fonts-noto-cjk \
+            gnupg \
+            libssl1.0-dev \
             node-less \
+            python3-num2words \
             python3-pip \
-            python3-setuptools \
+            python3-phonenumbers \
+            python3-pyldap \
+            python3-qrcode \
             python3-renderpm \
-            libssl-dev \
-            xz-utils \
-            software-properties-common \
-            build-essential \
-            libffi-dev \
-            python3-dev \
+            python3-setuptools \
+            python3-slugify \
+            python3-vobject \
             python3-watchdog \
-        && curl -o wkhtmltox.tar.xz -SL https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.4/wkhtmltox-0.12.4_linux-generic-amd64.tar.xz \
-        && echo '3f923f425d345940089e44c1466f6408b9619562 wkhtmltox.tar.xz' | sha1sum -c - \
-        && tar xvf wkhtmltox.tar.xz \
-        && cp wkhtmltox/lib/* /usr/local/lib/ \
-        && cp wkhtmltox/bin/* /usr/local/bin/ \
-        && cp -r wkhtmltox/share/man/man1 /usr/local/share/man/
+            python3-xlrd \
+            python3-xlwt \
+            xz-utils \
+        && curl -o wkhtmltox.deb -sSL https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.stretch_amd64.deb \
+        && echo '7e35a63f9db14f93ec7feeb0fce76b30c08f2057 wkhtmltox.deb' | sha1sum -c - \
+        && apt-get install -y --no-install-recommends ./wkhtmltox.deb \
+        && rm -rf /var/lib/apt/lists/* wkhtmltox.deb
+
+# install latest postgresql-client
+RUN set -x; \
+        echo 'deb http://apt.postgresql.org/pub/repos/apt/ stretch-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
+        && export GNUPGHOME="$(mktemp -d)" \
+        && repokey='B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8' \
+        && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${repokey}" \
+        && gpg --batch --armor --export "${repokey}" > /etc/apt/trusted.gpg.d/pgdg.gpg.asc \
+        && gpgconf --kill all \
+        && rm -rf "$GNUPGHOME" \
+        && apt-get update  \
+        && apt-get install -y postgresql-client \
+        && rm -rf /var/lib/apt/lists/*
 
 # Install Odoo
 ENV ODOO_VERSION 11.0
-ENV ODOO_RELEASE 20181129
+ARG ODOO_RELEASE=20200121
+ARG ODOO_SHA=13f30434cb4fb28b11d78fd4e7c616d03362f779
 RUN set -x; \
-        curl -o odoo.deb -SL http://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
-        && echo '10faa334af9d385983f114e7d5151a4a420f02f5 odoo.deb' | sha1sum -c - \
+        curl -o odoo.deb -sSL http://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
+        && echo "${ODOO_SHA} odoo.deb" | sha1sum -c - \
         && dpkg --force-depends -i odoo.deb \
         && apt-get update \
         && apt-get -y install -f --no-install-recommends \
         && rm -rf /var/lib/apt/lists/* odoo.deb
 
+
+# *** BOHM UPDATES ***
+# ==============================================================================
+RUN pip3 install wheel && pip3 install qrcode pyjwt redis gevent pyopenssl sentry-sdk json2html
+# ==============================================================================
+
 # Copy entrypoint script and Odoo configuration file
-RUN pip3 install wheel
-RUN pip3 install qrcode vobject num2words xlwt pyjwt phonenumbers redis gevent pyopenssl sentry-sdk json2html
 COPY ./entrypoint.sh /
 COPY ./odoo.conf /etc/odoo/
-RUN chown odoo /etc/odoo/odoo.conf
 
+# *** BOHM UPDATES ***
+# ==============================================================================
 # Create the Odoo Enterprise and Session Directories.
 RUN mkdir -p /mnt/enterprise && mkdir -p /mnt/session/smile_redis_session_store
 
@@ -63,17 +91,22 @@ COPY ./smile_redis_session_store/ /mnt/session/smile_redis_session_store/
 
 # Copy Enterprise into the Docker Container
 COPY ./enterprise/ /mnt/enterprise/
+# ==============================================================================
 
-# Mount /var/lib/odoo to allow restoring filestore and /mnt/extra_addons for users addons
-RUN mkdir -p /mnt/extra_addons \
-        && chown -R odoo /mnt/extra_addons
-VOLUME ["/var/lib/odoo", "/mnt/extra_addons"]
+# Mount /var/lib/odoo to allow restoring filestore and /mnt/extra-addons for users addons
+RUN chown odoo /etc/odoo/odoo.conf \
+    && mkdir -p /mnt/extra-addons \
+    && chown -R odoo /mnt/extra-addons
+VOLUME ["/var/lib/odoo", "/mnt/extra-addons"]
 
 # Expose Odoo services
 EXPOSE 8069 8071
 
 # Set the default config file
 ENV ODOO_RC /etc/odoo/odoo.conf
+
+COPY wait-for-psql.py /usr/local/bin/wait-for-psql.py
+RUN chmod +x /usr/local/bin/wait-for-psql.py
 
 # Set default user when running the container
 USER odoo
